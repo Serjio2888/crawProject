@@ -4,30 +4,60 @@ import json
 import asyncio
 import aioamqp
 from queue import Queue
+from random import randint
+import asynctnt
+#возвращать нормальные ответы
+#разобраться с апдейтами
+#мб сделать ОРМ
 
 class Ahandler():
     def __init__(self):
         self.q = Queue()
+        self.conn = asynctnt.Connection(host='127.0.0.1', port=3327)
 
     async def hello(self, request):
         return web.Response(text="Hello, world\n")
 
-    async def sh(self, request):
-        print(request)
-        print(request.match_info.get('do'))
+    async def current(self, request):
+        u_token = request.match_info['token']
+        await self.conn.connect()
+        data = await self.conn.select('token', key={'token':u_token}, index='tok')
+        new_data = await self.conn.select('user', key={'id':data[0]['user_id']}, index='primary')
+        print(new_data)
+        inform = {'data':{'id': new_data[0]['id'], 'email':  new_data[0]['email'], 'name': new_data[0]['name'], 
+            'created_date': new_data[0]['created'], 'last_login_date': new_data[0]['last_login']}}
+        return web.Response(body=json.dumps(inform), status=200)
+
+
+    async def login(self, request):
+        req = await request.json()
+        transport, protocol = await aioamqp.connect(host='localhost', login_method='PLAIN')
+        channel = await protocol.channel()
+        req['usage']='login'
+
+        await channel.queue_declare(queue_name='inreg', durable=True)
+        await channel.basic_publish(
+            payload=json.dumps(req),
+            exchange_name='',
+            routing_key='inreg'
+        )
+        print(" [x] Senttttttt json")
+        await protocol.close()
+        transport.close()
+
         return web.Response(text="shit\n")
 
     async def signup(self, request):
         req = await request.json()
         transport, protocol = await aioamqp.connect(host='localhost', login_method='PLAIN')
         channel = await protocol.channel()
-
-        await channel.queue_declare(queue_name='inbound', durable=True)
-
+        req['usage']='signup'
+        print(req)
+        await channel.queue_declare(queue_name='inreg', durable=True)
         await channel.basic_publish(
             payload=json.dumps(req),
             exchange_name='',
-            routing_key='inbound'
+            routing_key='inreg'
         )
         print(" [x] Sent json")
         await protocol.close()
@@ -36,10 +66,10 @@ class Ahandler():
         transport, protocol = await aioamqp.connect(host='localhost', login_method='PLAIN')
         channel = await protocol.channel()
 
-        await channel.queue_declare(queue_name='outbound', durable=True)
-        await channel.basic_consume(self.callback, queue_name='outbound', no_ack=True)
-
-        await asyncio.sleep(0.2)
+        await channel.queue_declare(queue_name='outreg', durable=True)
+        await channel.basic_consume(self.callback, queue_name='outreg', no_ack=True)
+        print('received')
+        await asyncio.sleep(0.3)
         js = await self.qqq()
         if js != 'error':
             return web.Response(body=js, status=200)
@@ -47,6 +77,7 @@ class Ahandler():
             return web.Response(body='shit happens', status=404)
 
     async def qqq(self):
+        print('gotcha')
         return self.q.get()
 
     async def callback(self, channel, body, envelope, properties):
@@ -58,8 +89,8 @@ class Ahandler():
 app = web.Application()
 h = Ahandler()
 app.add_routes([web.get('/', h.hello)])
-app.add_routes([web.get('/shit/{do}', h.sh)])
-app.add_routes([web.post('/shit/{do}', h.sh)])#email, password
+app.add_routes([web.get('/current/{token}', h.current)])
+app.add_routes([web.post('/login', h.login)])#email, password
 app.add_routes([web.post('/signup', h.signup)]) #curl -d '{"name":"rofl", "mail":"sdsd", "pass":12345}' http://localhost:8080/signup
 
 web.run_app(app)
