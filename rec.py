@@ -2,10 +2,11 @@ import asyncio
 import aioamqp
 import json
 import asynctnt
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import uuid
 import asynctnt
+import asyncpg
 
 async def hashing(ll):
     ll = hashlib.md5(str(ll).encode())
@@ -17,29 +18,62 @@ async def dating():
 async def get_token():
     return uuid.uuid4()
 
+async def us(conn, body):
+    mail = body['mail']
+    row = await conn.fetchrow('SELECT * FROM users WHERE mail = $1', mail)
+    print('row',row)
+    return row
+
+async def current(conn, body, dtm):
+    token = body['tok']
+    print(body)
+    print('tokened')
+    row = await conn.fetchrow('SELECT * FROM token WHERE token = $1', token) 
+    if row['expire_date']>dtm:
+        row = await conn.fetchrow('SELECT * FROM users WHERE id = $1', row['user_id'])
+        print('awaiting info')
+        print('to do', row)
+        return json.dumps((row['email'], row['id'], str(row['created_date']), str(row['last_login_date'])))
+    else:
+        return 'failed token'
+
 async def sign(conn, body, dtm):
     mail = body['mail']
     name = body['name']
+    print('here')
     passw = await hashing(body['pass'])
-    data = await conn.insert('user', [None, name, mail, passw, str(dtm), str(dtm)])
-    user_id = data[0]['id']
-    token = await get_token()
-    await conn.insert('token', [None, str(token), user_id, str(dtm)])
-    return json.dumps((str(token), str(dtm)))
-
-async def login(conn, body, dtm):
-    mail = body['mail']
-    passw = await hashing(body['pass'])
-    data = await conn.select('user', key={'email':mail}, index='sec')
-    print(data)
     try:
-        d = data[0]
-        if d['pass']==passw:
-            #надо апдейтнуть таблицу с токеном
-            #апдейтнуть дату последнего логина
+        await conn.execute('''
+            INSERT INTO users(email, password, name, created_date, last_login_date) VALUES($1, $2, $3, $4, $5)
+        ''', mail, passw, name, dtm, dtm)
+        row = await us(conn, body)
+        user_id = row['id']
+        token = await get_token()
+        await conn.execute('''
+            INSERT INTO token(token, user_id, expire_date) VALUES($1, $2, $3)
+        ''', str(token), user_id, dtm+timedelta(hours=23))
+        print('token')
+        return json.dumps(('registred', name))
+    except:
+        return json.dumps(('some fu*king error'))
+
+
+#datetime.now() + timedelta(minutes=30) - увеличим время
+async def login(conn, body, dtm):
+    passw = await hashing(body['pass'])
+    print('p1: ', passw)
+    try:
+        row = await us(conn, body)
+        print('p2: ', row['password'])
+        if row['password']==passw:
+            await conn.execute('''
+                UPDATE users SET last_login_date = $1 WHERE email = $2;''',
+                dtm, row['email'])
             new_token = str(uuid.uuid4())
-            #print(await conn.update('token',  [ ['=', 'token', new_token ] ], key={'user_id':d['id']},)) - не вышло
-            return new_token
+            await conn.execute('''
+                INSERT INTO token(token, user_id, expire_date) VALUES($1, $2, $3)
+                ''', new_token, row['id'], dtm+timedelta(hours=23))
+            return json.dumps(new_token)
         else:
             return 'wrong password'
     except:
@@ -49,20 +83,24 @@ async def login(conn, body, dtm):
 async def callback(channel, body, envelope, properties):
     print(1)
     body = json.loads(body)
-    conn = asynctnt.Connection(host='127.0.0.1', port=3327)
-    await conn.connect()
+    conn = await asyncpg.connect('postgresql://serg@localhost/tp', password='qwerty')
     dtm = await dating()
     if body['usage']=='signup':
         answ = await sign(conn, body, dtm)
 
     elif body['usage']=='login':
         answ = await login(conn, body, dtm)
-        print(answ)
+
+    elif body['usage']=='index':
+        answ = json.dumps(('here we go again'))
+
+    elif body['usage']=='current':#############
+        answ = await current(conn, body, dtm)
 
     transport, protocol = await aioamqp.connect(host='localhost', login_method='PLAIN')
     channel = await protocol.channel()
     await channel.queue_declare(queue_name='outreg', durable=True)
-
+    await asyncio.sleep(0.2)
     await channel.basic_publish(
         payload=answ,
         exchange_name='',
@@ -71,7 +109,6 @@ async def callback(channel, body, envelope, properties):
     print(" [x] Senteeed json")
     await protocol.close()
     transport.close()
-
     print(" [x] Sented json")
 
 

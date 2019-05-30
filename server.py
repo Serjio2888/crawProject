@@ -5,70 +5,42 @@ import asyncio
 import aioamqp
 from queue import Queue
 from random import randint
-import asynctnt
-#возвращать нормальные ответы
-#разобраться с апдейтами
-#мб сделать ОРМ
+import asyncpg
+
+#связь краулера и сервера - как лучше?
+#возвращать нормальные ответы  - всё ещё актуально
+#разобраться с апдейтами - yes
+#мб сделать ОРМ - hhaha
+
+#Запрос на проверку токена доступа (validate). В сообщении должен передаваться токен доступа. 
+#В ответ должны возвратиться все данные пользователя (из таблицы User), иначе ошибка.
+
 
 class Ahandler():
     def __init__(self):
         self.q = Queue()
-        self.conn = asynctnt.Connection(host='127.0.0.1', port=3327)
+        #self.conn = asynctnt.Connection(host='127.0.0.1', port=3666)
 
     async def hello(self, request):
         return web.Response(text="Hello, world\n")
 
-    async def current(self, request):
-        u_token = request.match_info['token']
-        await self.conn.connect()
-        data = await self.conn.select('token', key={'token':u_token}, index='tok')
-        new_data = await self.conn.select('user', key={'id':data[0]['user_id']}, index='primary')
-        print(new_data)
-        inform = {'data':{'id': new_data[0]['id'], 'email':  new_data[0]['email'], 'name': new_data[0]['name'], 
-            'created_date': new_data[0]['created'], 'last_login_date': new_data[0]['last_login']}}
-        return web.Response(body=json.dumps(inform), status=200)
+    async def stat(self, request):
+        token=request.match_info['token']
+        conn = await asyncpg.connect('postgresql://serg@localhost/tp', password='qwerty')
+        row = await conn.fetchrow(
+        'SELECT * FROM token WHERE token = $1', token)
+        info = await conn.fetchrow(
+        'SELECT * FROM stats WHERE user_id = $1', row['user_id'])
+        return web.Response(body=json.dumps((info['domain'], info['user_id'], info['https'],
+                                            info['name'], info['time'], info['pages_count'],
+                                            info['avg_time_per_page'])), status=200)
 
 
-    async def login(self, request):
+    async def index(self, request):#даже не пытайся меня вызвать
         req = await request.json()
-        transport, protocol = await aioamqp.connect(host='localhost', login_method='PLAIN')
-        channel = await protocol.channel()
-        req['usage']='login'
-
-        await channel.queue_declare(queue_name='inreg', durable=True)
-        await channel.basic_publish(
-            payload=json.dumps(req),
-            exchange_name='',
-            routing_key='inreg'
-        )
-        print(" [x] Senttttttt json")
-        await protocol.close()
-        transport.close()
-
-        return web.Response(text="shit\n")
-
-    async def signup(self, request):
-        req = await request.json()
-        transport, protocol = await aioamqp.connect(host='localhost', login_method='PLAIN')
-        channel = await protocol.channel()
-        req['usage']='signup'
-        print(req)
-        await channel.queue_declare(queue_name='inreg', durable=True)
-        await channel.basic_publish(
-            payload=json.dumps(req),
-            exchange_name='',
-            routing_key='inreg'
-        )
-        print(" [x] Sent json")
-        await protocol.close()
-        transport.close()
-
-        transport, protocol = await aioamqp.connect(host='localhost', login_method='PLAIN')
-        channel = await protocol.channel()
-
-        await channel.queue_declare(queue_name='outreg', durable=True)
-        await channel.basic_consume(self.callback, queue_name='outreg', no_ack=True)
-        print('received')
+        req['usage']='index'
+        req['tok']=request.match_info['token']
+        await self.queues(req)
         await asyncio.sleep(0.3)
         js = await self.qqq()
         if js != 'error':
@@ -76,6 +48,56 @@ class Ahandler():
         else:
             return web.Response(body='shit happens', status=404)
 
+    async def current(self, request):
+        req = dict()
+        req['usage']='current'
+        req['tok']=request.match_info['token']
+        await self.queues(req)
+        await asyncio.sleep(0.3)
+        js = await self.qqq()
+        if js != 'error':
+            return web.Response(body=js, status=200)
+        else:
+            return web.Response(body='shit happens', status=404)
+
+    async def login(self, request):
+        req = await request.json()
+        req['usage']='login'
+        await self.queues(req)
+        await asyncio.sleep(0.3)
+        js = await self.qqq()
+        if js != 'error':
+            return web.Response(body=js, status=200)
+        else:
+            return web.Response(body='shit happens', status=404)
+
+    async def signup(self, request):
+        req = await request.json()
+        req['usage']='signup'
+        await self.queues(req)
+        await asyncio.sleep(0.3)
+        js = await self.qqq()
+        if js != 'error':
+            return web.Response(body=js, status=200)
+        else:
+            return web.Response(body='shit happens', status=404)
+
+    async def queues(self, req):
+        transport, protocol = await aioamqp.connect(host='localhost', login_method='PLAIN')
+        channel = await protocol.channel()
+        await channel.queue_declare(queue_name='inreg', durable=True)
+        await channel.basic_publish(
+            payload=json.dumps(req),
+            exchange_name='',
+            routing_key='inreg'
+        )
+        print(" [x] Sent json")
+        await channel.queue_declare(queue_name='outreg', durable=True)
+        await channel.basic_consume(self.callback, queue_name='outreg', no_ack=True)
+        await protocol.close()
+        transport.close()
+        return None
+        
     async def qqq(self):
         print('gotcha')
         return self.q.get()
@@ -87,12 +109,13 @@ class Ahandler():
 
 
 app = web.Application()
-h = Ahandler()
+h = Ahandler()#POST /index
 app.add_routes([web.get('/', h.hello)])
 app.add_routes([web.get('/current/{token}', h.current)])
 app.add_routes([web.post('/login', h.login)])#email, password
 app.add_routes([web.post('/signup', h.signup)]) #curl -d '{"name":"rofl", "mail":"sdsd", "pass":12345}' http://localhost:8080/signup
-
+app.add_routes([web.post('/index/{token}', h.index)])
+app.add_routes([web.get('/stat/{token}', h.stat)])
 web.run_app(app)
 
 
