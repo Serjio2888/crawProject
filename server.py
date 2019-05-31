@@ -19,6 +19,8 @@ import asyncpg
 class Ahandler():
     def __init__(self):
         self.q = Queue()
+        #self.requests = {
+        #    'irjeoigejero': asyncio.Future()}
         #self.conn = asynctnt.Connection(host='127.0.0.1', port=3666)
 
     async def hello(self, request):
@@ -74,7 +76,9 @@ class Ahandler():
     async def signup(self, request):
         req = await request.json()
         req['usage']='signup'
-        await self.queues(req)
+        fut = await self.queues(req)
+
+        #await fut
         await asyncio.sleep(0.3)
         js = await self.qqq()
         if js != 'error':
@@ -91,6 +95,9 @@ class Ahandler():
             exchange_name='',
             routing_key='inreg'
         )
+        fut = asyncio.Future()
+        self.requests['rjwiejf'] = fut
+        #return fut
         print(" [x] Sent json")
         await channel.queue_declare(queue_name='outreg', durable=True)
         await channel.basic_consume(self.callback, queue_name='outreg', no_ack=True)
@@ -103,6 +110,8 @@ class Ahandler():
         return self.q.get()
 
     async def callback(self, channel, body, envelope, properties):
+        #fut = self.requests[reqid]
+        #fut.set_data(body)
         return self.q.put(body)
 
 

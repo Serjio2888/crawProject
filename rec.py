@@ -1,11 +1,9 @@
 import asyncio
 import aioamqp
 import json
-import asynctnt
 from datetime import datetime, timedelta
 import hashlib
 import uuid
-import asynctnt
 import asyncpg
 
 async def hashing(ll):
@@ -20,7 +18,9 @@ async def get_token():
 
 async def us(conn, body):
     mail = body['mail']
-    row = await conn.fetchrow('SELECT * FROM users WHERE mail = $1', mail)
+    print('mail', mail)
+    print('body', body)
+    row = await conn.fetchrow('SELECT * FROM users WHERE email = $1', mail)
     print('row',row)
     return row
 
@@ -30,10 +30,18 @@ async def current(conn, body, dtm):
     print('tokened')
     row = await conn.fetchrow('SELECT * FROM token WHERE token = $1', token) 
     if row['expire_date']>dtm:
+        slova = dict()
+        data = dict()
         row = await conn.fetchrow('SELECT * FROM users WHERE id = $1', row['user_id'])
         print('awaiting info')
         print('to do', row)
-        return json.dumps((row['email'], row['id'], str(row['created_date']), str(row['last_login_date'])))
+        slova['email']=row['email']
+        slova['id']=row['id']
+        slova['created']=str(row['created_date'])
+        slova['last_login']=str(row['last_login_date'])
+        data['data']=slova
+        data['status']=200
+        return json.dumps(data)#{row['email'], row['id'], str(row['created_date']), str(row['last_login_date'])})
     else:
         return 'failed token'
 
@@ -43,15 +51,15 @@ async def sign(conn, body, dtm):
     print('here')
     passw = await hashing(body['pass'])
     try:
-        await conn.execute('''
+        print('reg', await conn.execute('''
             INSERT INTO users(email, password, name, created_date, last_login_date) VALUES($1, $2, $3, $4, $5)
-        ''', mail, passw, name, dtm, dtm)
+        ''', mail, passw, name, dtm, dtm))
         row = await us(conn, body)
         user_id = row['id']
         token = await get_token()
-        await conn.execute('''
+        print('tokeneddd',await conn.execute('''
             INSERT INTO token(token, user_id, expire_date) VALUES($1, $2, $3)
-        ''', str(token), user_id, dtm+timedelta(hours=23))
+        ''', str(token), user_id, dtm+timedelta(hours=23)))
         print('token')
         return json.dumps(('registred', name))
     except:

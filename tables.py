@@ -7,7 +7,9 @@ async def main():
     # as a "postgres" user.
     conn = await asyncpg.connect('postgresql://serg@localhost/tp', password='qwerty')
     # Execute a statement to create a new table.
-
+    mail = 'sdsd'
+    row = await conn.fetchrow('SELECT * FROM users WHERE email = $1', mail)
+    print(row)
     #await conn.execute('DROP TABLE stats')
 
     # Insert a record into the created table.
