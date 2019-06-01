@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import hashlib
 import uuid
 import asyncpg
+from aioelasticsearch import Elasticsearch
 
 async def hashing(ll):
     ll = hashlib.md5(str(ll).encode())
@@ -18,16 +19,11 @@ async def get_token():
 
 async def us(conn, body):
     mail = body['mail']
-    print('mail', mail)
-    print('body', body)
     row = await conn.fetchrow('SELECT * FROM users WHERE email = $1', mail)
-    print('row',row)
     return row
 
 async def current(conn, body, dtm):
-    token = body['tok']
-    print(body)
-    print('tokened')
+    token = body[0]['tok']
     row = await conn.fetchrow('SELECT * FROM token WHERE token = $1', token) 
     if row['expire_date']>dtm:
         slova = dict()
@@ -41,37 +37,33 @@ async def current(conn, body, dtm):
         slova['last_login']=str(row['last_login_date'])
         data['data']=slova
         data['status']=200
-        return json.dumps(data)#{row['email'], row['id'], str(row['created_date']), str(row['last_login_date'])})
+        return json.dumps((data, body[1]))#{row['email'], row['id'], str(row['created_date']), str(row['last_login_date'])})
     else:
         return 'failed token'
 
 async def sign(conn, body, dtm):
-    mail = body['mail']
-    name = body['name']
-    print('here')
-    passw = await hashing(body['pass'])
+    mail = body[0]['mail']
+    name = body[0]['name']
+    passw = await hashing(body[0]['pass'])
     try:
-        print('reg', await conn.execute('''
+        await conn.execute('''
             INSERT INTO users(email, password, name, created_date, last_login_date) VALUES($1, $2, $3, $4, $5)
-        ''', mail, passw, name, dtm, dtm))
-        row = await us(conn, body)
+        ''', mail, passw, name, dtm, dtm)
+        row = await us(conn, body[0])
         user_id = row['id']
         token = await get_token()
-        print('tokeneddd',await conn.execute('''
+        await conn.execute('''
             INSERT INTO token(token, user_id, expire_date) VALUES($1, $2, $3)
-        ''', str(token), user_id, dtm+timedelta(hours=23)))
-        print('token')
-        return json.dumps(('registred', name))
+        ''', str(token), user_id, dtm+timedelta(hours=23))
+        js = [{'status':'ok', 'data':{'token':str(token), 'expire':str(dtm+timedelta(hours=23))}}, body[1]]
+        return json.dumps(js)
     except:
         return json.dumps(('some fu*king error'))
 
-
-#datetime.now() + timedelta(minutes=30) - увеличим время
 async def login(conn, body, dtm):
-    passw = await hashing(body['pass'])
-    print('p1: ', passw)
+    passw = await hashing(body[0]['pass'])
     try:
-        row = await us(conn, body)
+        row = await us(conn, body[0])
         print('p2: ', row['password'])
         if row['password']==passw:
             await conn.execute('''
@@ -81,28 +73,39 @@ async def login(conn, body, dtm):
             await conn.execute('''
                 INSERT INTO token(token, user_id, expire_date) VALUES($1, $2, $3)
                 ''', new_token, row['id'], dtm+timedelta(hours=23))
-            return json.dumps(new_token)
+            js = [{'status':'ok', 'data':{'token':new_token, 'expire':str(dtm+timedelta(hours=23))}},body[1] ]
+            return json.dumps(js)
         else:
-            return 'wrong password'
+            return  [{'status': 'wrong pass', 'data': {}}, body[1]]
     except:
-        return 'no such user'
+        return [{'status': 'no such user', 'data': {}}, body[1]]
+
+async def search(conn, body, dtm):
+    #speaking honestly, i have no idea how can i search documents
+    try:
+        es = Elasticsearch()
+        res = await es.get(index="test-index", doc_type='tweet')
+        str(res['_source']).replace('\n','')
+        ###print(str(res['_source']).replace('\n','')[body['offset']:body['offset']+body['limit']])???
+        return json.dumps(body)
+    except:
+        return json.dumps(('error'))
 
 
 async def callback(channel, body, envelope, properties):
-    print(1)
     body = json.loads(body)
     conn = await asyncpg.connect('postgresql://serg@localhost/tp', password='qwerty')
     dtm = await dating()
-    if body['usage']=='signup':
+    if body[0]['usage']=='signup':
         answ = await sign(conn, body, dtm)
 
-    elif body['usage']=='login':
+    elif body[0]['usage']=='login':
         answ = await login(conn, body, dtm)
 
-    elif body['usage']=='index':
-        answ = json.dumps(('here we go again'))
+    elif body[0]['usage']=='search':
+        answ = await search(conn, body, dtm)
 
-    elif body['usage']=='current':#############
+    elif body[0]['usage']=='current':
         answ = await current(conn, body, dtm)
 
     transport, protocol = await aioamqp.connect(host='localhost', login_method='PLAIN')
@@ -114,10 +117,10 @@ async def callback(channel, body, envelope, properties):
         exchange_name='',
         routing_key='outreg'
     )
-    print(" [x] Senteeed json")
+    print(" [x] Sented json")
     await protocol.close()
     transport.close()
-    print(" [x] Sented json")
+
 
 
 async def receive():

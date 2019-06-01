@@ -3,33 +3,18 @@ import asyncpg
 from datetime import datetime
 
 async def main():
-    # Establish a connection to an existing database named "test"
-    # as a "postgres" user.
     conn = await asyncpg.connect('postgresql://serg@localhost/tp', password='qwerty')
-    # Execute a statement to create a new table.
-    mail = 'sdsd'
-    row = await conn.fetchrow('SELECT * FROM users WHERE email = $1', mail)
-    print(row)
     #await conn.execute('DROP TABLE stats')
-
-    # Insert a record into the created table.
     #p = await conn.execute('''
     #    INSERT INTO token(token, user_id, expire_date) VALUES($1, $2, $3)
     #''', 'ffdgfdgfdg', 1, datetime.now())
-
-
-    # Select a row from the table.
     #row = await conn.fetchrow(
     #    'SELECT * FROM token WHERE user_id = $1', 1)
-    #print(row['token'])
-    # *row* now contains
-    # asyncpg.Record(id=1, name='Bob', dob=datetime.date(1984, 3, 1))
-
-    # Close the connection.
     await conn.close()
 
 asyncio.get_event_loop().run_until_complete(main())
 
+#КАК Я ДЕЛАЛ ТАБЛИЦЫ:
     # await conn.execute("""
     #      CREATE TABLE stats (
     #          domain text,
@@ -62,13 +47,3 @@ asyncio.get_event_loop().run_until_complete(main())
     #          last_login_date timestamp
     #      )
     #  """)
-
-    # Таблица CrawlerStats:
-    # domain - text
-    # author_id (fk to User) - int
-    # https - int (0/1)
-    # time - datetime
-    # pages_count - int
-    # avg_time_per_page - float
-    # max_time_per_page - float
-    # min_time_per_page - float

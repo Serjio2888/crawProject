@@ -6,6 +6,7 @@ import aioamqp
 from queue import Queue
 from random import randint
 import asyncpg
+from uuid import uuid4
 
 #связь краулера и сервера - как лучше?
 #возвращать нормальные ответы  - всё ещё актуально
@@ -19,112 +20,149 @@ import asyncpg
 class Ahandler():
     def __init__(self):
         self.q = Queue()
-        #self.requests = {
-        #    'irjeoigejero': asyncio.Future()}
-        #self.conn = asynctnt.Connection(host='127.0.0.1', port=3666)
+        self.requests = {   }
+        self.transport, self.protocol = None, None
+        self.channel = None
+        self.channel_in = None
+        self.channel_out = None
+
+    async def channeling(self):
+        self.transport, self.protocol = await aioamqp.connect(host='localhost', login_method='PLAIN')
+        self.channel = await self.protocol.channel()
+        self.channel_in = await self.channel.queue_declare(queue_name='inreg', durable=True)
+        self.channel_out = await self.channel.queue_declare(queue_name='outreg', durable=True)
+        self.channel_cr = await self.channel.queue_declare(queue_name='incraw', durable=True)
+        self.channel_crr = await self.channel.queue_declare(queue_name='outcraw', durable=True)
 
     async def hello(self, request):
-        return web.Response(text="Hello, world\n")
+        print('yes, it works, dude')
+        return web.Response(text='answer')
 
-    async def stat(self, request):
+    async def stat(self, request):#working good
         token=request.match_info['token']
         conn = await asyncpg.connect('postgresql://serg@localhost/tp', password='qwerty')
         row = await conn.fetchrow(
         'SELECT * FROM token WHERE token = $1', token)
+        print(row['user_id'])
         info = await conn.fetchrow(
         'SELECT * FROM stats WHERE user_id = $1', row['user_id'])
+        await asyncio.sleep(1)
         return web.Response(body=json.dumps((info['domain'], info['user_id'], info['https'],
                                             info['name'], info['time'], info['pages_count'],
                                             info['avg_time_per_page'])), status=200)
 
-
-    async def index(self, request):#даже не пытайся меня вызвать
+    async def login(self, request):
         req = await request.json()
-        req['usage']='index'
-        req['tok']=request.match_info['token']
-        await self.queues(req)
+        req['usage']='login'
+        words = str(uuid4())
+        await self.queues(req, words)
         await asyncio.sleep(0.3)
-        js = await self.qqq()
-        if js != 'error':
+        js = await self.requests[words]
+        if json.loads(js)['status'] == 'ok':
             return web.Response(body=js, status=200)
         else:
-            return web.Response(body='shit happens', status=404)
+            return web.Response(body=js, status=400)
+
+    async def signup(self, request):
+        req = await request.json()
+        req['usage']='signup'
+        words = str(uuid4())
+        await self.queues(req, words)
+        await asyncio.sleep(1.3)
+        js = await self.requests[words]
+        if json.loads(js)['status'] == 'ok':
+            return web.Response(body=js, status=200)
+        else:
+            return web.Response(body=js, status=400)
 
     async def current(self, request):
         req = dict()
         req['usage']='current'
         req['tok']=request.match_info['token']
-        await self.queues(req)
+        words = str(uuid4())
+        await self.queues(req, words)
         await asyncio.sleep(0.3)
-        js = await self.qqq()
+        js = await self.requests[words]
         if js != 'error':
             return web.Response(body=js, status=200)
         else:
             return web.Response(body='shit happens', status=404)
 
-    async def login(self, request):
+    async def ind(self, request):
         req = await request.json()
-        req['usage']='login'
-        await self.queues(req)
+        req['tok']=request.match_info['token']
+        words = str(uuid4())
+        await self.tocraw(req, words)
+        #идем в craw.py
         await asyncio.sleep(0.3)
-        js = await self.qqq()
+        js = await self.requests[words]
         if js != 'error':
             return web.Response(body=js, status=200)
         else:
             return web.Response(body='shit happens', status=404)
 
-    async def signup(self, request):
+    async def search(self, request):
         req = await request.json()
-        req['usage']='signup'
-        fut = await self.queues(req)
-
-        #await fut
+        if req['limit']>100:
+            req['limit']=100
+        if req['limit']<1 or req['offset']<0:
+            return web.Response(body='wrong data', status=400)
+        req['usage']='search'
+        words = str(uuid4())
+        await self.tocraw(req, words)
         await asyncio.sleep(0.3)
-        js = await self.qqq()
+        js = await self.requests[words]
         if js != 'error':
             return web.Response(body=js, status=200)
         else:
             return web.Response(body='shit happens', status=404)
 
-    async def queues(self, req):
-        transport, protocol = await aioamqp.connect(host='localhost', login_method='PLAIN')
-        channel = await protocol.channel()
-        await channel.queue_declare(queue_name='inreg', durable=True)
-        await channel.basic_publish(
-            payload=json.dumps(req),
+    async def tocraw(self, req, words):
+        if not self.protocol:
+            await self.channeling()
+        await self.channel.basic_publish(
+            payload=json.dumps((req, words)),
+            exchange_name='',
+            routing_key='incraw'
+        )
+        print(" [x] Sent json")
+        fut = asyncio.Future()
+        self.requests[words] = fut
+        await self.channel.basic_consume(self.callback, queue_name='outcraw', no_ack=True)
+        return None
+
+    async def queues(self, req, words):
+        if not self.protocol:
+            await self.channeling()
+        await self.channel.basic_publish(
+            payload=json.dumps((req, words)),
             exchange_name='',
             routing_key='inreg'
         )
-        fut = asyncio.Future()
-        self.requests['rjwiejf'] = fut
-        #return fut
         print(" [x] Sent json")
-        await channel.queue_declare(queue_name='outreg', durable=True)
-        await channel.basic_consume(self.callback, queue_name='outreg', no_ack=True)
-        await protocol.close()
-        transport.close()
+        fut = asyncio.Future()
+        self.requests[words] = fut
+        await self.channel.basic_consume(self.callback, queue_name='outreg', no_ack=True)
         return None
-        
-    async def qqq(self):
-        print('gotcha')
-        return self.q.get()
 
     async def callback(self, channel, body, envelope, properties):
-        #fut = self.requests[reqid]
-        #fut.set_data(body)
-        return self.q.put(body)
+        b = json.loads(body)
+        fut = self.requests[b[1]]
+        fut.set_result(json.dumps(b[0]))
 
 
 
 
 app = web.Application()
 h = Ahandler()#POST /index
-app.add_routes([web.get('/', h.hello)])
+app.add_routes([web.get('/', h.hello)])#for tests
 app.add_routes([web.get('/current/{token}', h.current)])
-app.add_routes([web.post('/login', h.login)])#email, password
-app.add_routes([web.post('/signup', h.signup)]) #curl -d '{"name":"rofl", "mail":"sdsd", "pass":12345}' http://localhost:8080/signup
-app.add_routes([web.post('/index/{token}', h.index)])
+app.add_routes([web.post('/ind/{token}', h.ind)])#'{"domain":"https://python.org"}'
+app.add_routes([web.post('/login', h.login)])#'{"mail":"sdsd", "pass":12345}'
+app.add_routes([web.post('/signup', h.signup)])
+#curl -d '{"name":"rofl", "mail":"sdsd", "pass":12345}' http://localhost:8080/signup
 app.add_routes([web.get('/stat/{token}', h.stat)])
+app.add_routes([web.post('/search', h.search)])#'{"q":"info", "limit":100, "offset":20}'
 web.run_app(app)
 
 
